@@ -1,8 +1,11 @@
+use clap::Parser;
 use dialoguer::MultiSelect;
 
 use crate::{cli::Cli, download, twot58::TwoT58};
 
-pub async fn run(cli: Cli) -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
     let keyword = cli.keyword;
     let service = TwoT58::try_new()?;
     println!("Searching for \"{}\"...", keyword);
