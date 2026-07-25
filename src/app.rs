@@ -1,7 +1,13 @@
 use clap::Parser;
 use dialoguer::MultiSelect;
 
-use crate::{cli::Cli, download, twot58::TwoT58};
+#[derive(Debug, Parser)]
+#[command(name = "rmus-dl", about = "Music Downloader Written in Rust")]
+pub struct Cli {
+    pub keyword: String,
+}
+
+use crate::{download, twot58::TwoT58};
 
 pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
