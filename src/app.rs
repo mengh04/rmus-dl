@@ -1,10 +1,11 @@
-use dialoguer::Select;
+use dialoguer::MultiSelect;
 
 use crate::{cli::Cli, download, twot58::TwoT58};
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let keyword = cli.keyword;
     let service = TwoT58::try_new()?;
+    println!("Searching for \"{}\"...", keyword);
     let results = service.search(&keyword).await?;
 
     let titles = results
@@ -12,22 +13,27 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         .map(|r| r.title.as_str())
         .collect::<Vec<&str>>();
 
-    let selection = Select::new()
-        .with_prompt("Which song do you want to download?")
+    let multi_selection = MultiSelect::new()
+        .with_prompt("Which songs do you want to download?")
         .items(titles)
         .interact()?;
 
-    let download_url = service.get_download_url(&results[selection]).await?;
+    for selection in multi_selection {
+        let download_url = service.get_download_url(&results[selection]).await?;
 
-    println!("Downloading...");
-    let file_path = download::download_file(download_url).await?;
-    println!("Downloaded to \"{}\"", file_path.canonicalize()?.display());
+        println!(
+            "Downloading {} from \"{}\"...",
+            results[selection].title, download_url
+        );
+        let file_path = download::download_file(download_url).await?;
+        println!("Downloaded to \"{}\"", file_path.canonicalize()?.display());
 
-    println!("Writing metadata...");
-    service
-        .write_metadata(&file_path, &results[selection])
-        .await?;
-    println!("Metadata written successfully!");
+        println!("Fetching metadata for \"{}\"...", results[selection].title);
+        service
+            .write_metadata(&file_path, &results[selection])
+            .await?;
+        println!("Metadata written successfully!");
+    }
 
     Ok(())
 }

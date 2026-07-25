@@ -14,7 +14,7 @@ pub async fn download_file(url: reqwest::Url) -> anyhow::Result<PathBuf> {
         .unwrap_or_else(ProgressBar::new_spinner);
     progress.set_style(
         ProgressStyle::default_bar()
-            .template("{bar:40.cyan/blue} {bytes}/{total_bytes} ({eta})")
+            .template("{bar:40.cyan/blue} {bytes}/{total_bytes} ({binary_bytes_per_sec}, {eta})")
             .unwrap()
             .progress_chars("=>-"),
     );
