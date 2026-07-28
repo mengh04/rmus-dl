@@ -34,14 +34,24 @@ pub async fn run() -> anyhow::Result<()> {
             "Downloading {} from \"{}\"...",
             results[selection].title, download_url
         );
-        let file_path = download::download_file(download_url).await?;
-        println!("Downloaded to \"{}\"", file_path.canonicalize()?.display());
+        if let Ok(file_path) = download::download_file(download_url).await {
+            println!("Downloaded to \"{}\"", file_path.canonicalize()?.display());
 
-        println!("Fetching metadata for \"{}\"...", results[selection].title);
-        service
-            .write_metadata(&file_path, &results[selection])
-            .await?;
-        println!("Metadata written successfully!");
+            println!("Fetching metadata for \"{}\"...", results[selection].title);
+            if let Err(e) = service
+                .write_metadata(&file_path, &results[selection])
+                .await
+            {
+                eprintln!("Failed to write metadata: {}", e);
+            } else {
+                println!("Metadata written successfully!");
+            }
+        } else {
+            println!(
+                "Failed to download \"{}\". Skipping...",
+                results[selection].title
+            );
+        }
     }
 
     Ok(())
