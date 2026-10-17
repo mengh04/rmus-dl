@@ -142,14 +142,14 @@ impl MusicSource for Kuwo {
             "https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId={}",
             song.song_id
         );
-        // 接口偶发返回空 data / 业务码 301，重试三次（间隔递增）。
-        // 注意：带 iPhone UA + Referer 反而容易被风控，这里只带默认浏览器 UA。
-        // 拿不到就是失败——元数据是下载成功的门禁，不再静默降级。
-        let mut last_err = anyhow::anyhow!("kuwo songinfo: empty data after 3 attempts");
-        for attempt in 0..3 {
+        // 接口间歇性返回空 data / 业务码 301（约一半概率），重试五次（间隔递增）。
+        // 实测必须带 Referer: https://m.kuwo.cn/ 才有较高成功率；不带则几乎必失败。
+        let mut last_err = anyhow::anyhow!("kuwo songinfo: empty data after 5 attempts");
+        for attempt in 0..5 {
             match self
                 .client
                 .get(&url)
+                .header("Referer", "https://m.kuwo.cn/")
                 .send()
                 .await?
                 .error_for_status()?

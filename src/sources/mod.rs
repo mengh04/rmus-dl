@@ -107,8 +107,15 @@ pub async fn write_metadata(file_path: &PathBuf, meta: &SongMetadata) -> Result<
         anyhow::bail!("No primary tag found in the audio file");
     };
 
+    // ItemKey::Lyrics 在 ID3v2（mp3）下没有对应帧，保存时会被静默丢弃，
+    // 必须用 UnsyncLyrics（USLT）；FLAC 的 Vorbis comment 习惯用 LYRICS 字段。
+    let lyrics_key = match tag.tag_type() {
+        lofty::tag::TagType::Id3v2 => ItemKey::UnsyncLyrics,
+        _ => ItemKey::Lyrics,
+    };
+
     if let Some(lyric) = &meta.lyric {
-        tag.insert_text(ItemKey::Lyrics, lyric.clone());
+        tag.insert_text(lyrics_key, lyric.clone());
     }
 
     if let Some(cover_url) = &meta.cover_url {
@@ -127,7 +134,7 @@ pub async fn write_metadata(file_path: &PathBuf, meta: &SongMetadata) -> Result<
     let Some(tag) = verified.primary_tag() else {
         anyhow::bail!("verification failed: no primary tag after save");
     };
-    if meta.lyric.is_some() && tag.get_items(ItemKey::Lyrics).next().is_none() {
+    if meta.lyric.is_some() && tag.get_items(lyrics_key).next().is_none() {
         anyhow::bail!("verification failed: LYRICS missing from tag after save");
     }
     if meta.cover_url.is_some() && tag.pictures().is_empty() {
