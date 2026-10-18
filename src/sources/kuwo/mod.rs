@@ -12,6 +12,9 @@ use super::{MusicSource, SearchResult, SongMetadata, urlencode};
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
+/// 可克隆（reqwest Client 本就是 Arc 内核）：插件模式下方便把源
+/// 克隆进后台下载任务。
+#[derive(Clone)]
 pub struct Kuwo {
     client: Client,
 }

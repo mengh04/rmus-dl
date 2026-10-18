@@ -73,9 +73,34 @@ pub async fn run() -> anyhow::Result<()> {
             Some(artist) => format!("{} - {}", result.title, artist),
             None => result.title.clone(),
         };
-        let file_path = match download::download_file(download_url, &fallback_name).await {
-            Ok(path) => path,
+        // CLI 模式：产物落当前目录；进度条画在 stderr（ indicatif 自带）
+        let progress = indicatif::ProgressBar::new_spinner();
+        progress.enable_steady_tick(std::time::Duration::from_millis(100));
+        progress.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} {bar:40.cyan/blue} {bytes}/{total_bytes} ({binary_bytes_per_sec}, {eta})",
+                )
+                .unwrap()
+                .progress_chars("=>-"),
+        );
+        let opts = download::DownloadOptions {
+            dest_dir: std::path::Path::new("."),
+            on_chunk: &|chunk, total| {
+                if let Some(total) = total {
+                    progress.set_length(total);
+                }
+                progress.inc(chunk);
+            },
+            cancelled: &|| false,
+        };
+        let file_path = match download::download_file(download_url, &fallback_name, &opts).await {
+            Ok(path) => {
+                progress.finish_with_message("Download complete");
+                path
+            }
             Err(e) => {
+                progress.finish_and_clear();
                 eprintln!("Failed to download \"{}\": {e}", result.title);
                 failures.push(result.title.clone());
                 continue;
