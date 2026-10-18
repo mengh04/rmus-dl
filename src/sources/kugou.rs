@@ -16,6 +16,8 @@ const USER_AGENT: &str =
 #[derive(Clone)]
 pub struct Kugou {
     client: Client,
+    /// 只要无损：先查 songinfo 拿无损专属 sqhash 再解析，拿不到就报错
+    flac_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,15 +81,115 @@ struct MetingItem {
 }
 
 impl Kugou {
-    pub fn new() -> Result<Self> {
+    pub fn new(flac_only: bool) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("User-Agent", HeaderValue::from_static(USER_AGENT));
         let client = Client::builder()
             .cookie_store(true)
             .default_headers(headers)
             .build()?;
-        Ok(Self { client })
+        Ok(Self { client, flac_only })
     }
+
+    /// 单曲品质信息：songinfo 接口的 extra 里按档位给了各格式的专属
+    /// hash 与精确大小。搜索返回的 hash 常是 128k 档的，无损必须用
+    /// 这里的 sqhash 去解析，否则拿到手的经常是 mp3。
+    async fn song_quality(&self, hash: &str) -> Result<QualityExtra> {
+        let url = format!(
+            "https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash={hash}"
+        );
+        let resp: SongQualityResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parse kugou songinfo response")?;
+        resp.extra.ok_or_else(|| anyhow::anyhow!("kugou songinfo: no extra"))
+    }
+
+    /// 逐候选解析站拿直链。expect_flac 时对每个候选做 Range 探针验魔数，
+    /// 不是 flac 就换下一个（解析站经常静默降级 mp3）；非 flac 模式取第一个。
+    async fn resolve_hash(&self, hash: &str, expect_flac: bool) -> Result<Url> {
+        let mut candidates: Vec<Url> = Vec::new();
+        let mut last_err = None;
+
+        // 1) baka：GET 302 到酷狗 CDN（重试 2 次）
+        for attempt in 0..2 {
+            let url = format!(
+                "https://api.baka.plus/meting/?server=kugou&type=url&id={}&br=2000",
+                hash
+            );
+            match self
+                .client
+                .get(&url)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.url().host_str() != Some("api.baka.plus") => {
+                    candidates.push(downgrade_to_http(resp.url()));
+                    break;
+                }
+                Ok(resp) => {
+                    last_err = Some(anyhow::anyhow!(
+                        "baka did not redirect (status {})",
+                        resp.status()
+                    ));
+                }
+                Err(e) => last_err = Some(e.into()),
+            }
+            if attempt == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+        }
+
+        // 2) meting 式解析站
+        for base in ["https://music.tom.moe/", "https://music.90svip.cn/"] {
+            match resolve_with_meting_site(&self.client, base, hash).await {
+                Ok(url) => candidates.push(downgrade_to_http(&url)),
+                Err(e) => {
+                    eprintln!("kugou: meting site {base} failed: {e}");
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            bail!("kugou: all resolvers failed for hash {hash}: {last_err:?}");
+        }
+        for url in candidates {
+            if !expect_flac {
+                return Ok(url);
+            }
+            if crate::sources::probe_audio(&url, true).await.is_ok() {
+                return Ok(url);
+            }
+            eprintln!("kugou: candidate is not flac, trying next resolver");
+        }
+        bail!("kugou: 所有解析站都给不出 flac for hash {hash}")
+    }
+}
+
+/// songinfo 接口的 extra 对象：各档位的 hash 与字节数。
+#[derive(Debug, Deserialize)]
+struct QualityExtra {
+    #[serde(rename = "sqhash")]
+    sq_hash: Option<String>,
+    #[serde(rename = "sqfilesize")]
+    sq_filesize: Option<u64>,
+    #[serde(rename = "320hash")]
+    hash_320: Option<String>,
+    #[serde(rename = "320filesize")]
+    filesize_320: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SongQualityResponse {
+    #[serde(default)]
+    extra: Option<QualityExtra>,
 }
 
 impl MusicSource for Kugou {
@@ -128,61 +230,45 @@ impl MusicSource for Kugou {
                     song_id: item.file_hash,
                     source: "kugou",
                     cover_url,
+                    // 搜索接口不带品质信息；下载时会查 songinfo 补齐
+                    duration_ms: 0,
+                    format: None,
+                    size_bytes: None,
                 }
             })
             .collect())
     }
 
-    /// 解析下载直链：降级链 baka（GET，重试 2 次）→ tom.moe → 90svip
-    /// （后两者是 musicdl 同款 meting 式 POST 解析站）。最终 URL 统一降为
-    /// http：酷狗 CDN 的 https 证书域名经常不匹配。
+    /// 解析下载直链。flac_only 时先查 songinfo 拿无损专属 sqhash
+    /// （搜索 hash 常是 128k 档的），逐候选解析站探活直到拿到真 flac；
+    /// 非 flac_only 时优先用 songinfo 的 320hash 精确拿 320k（搜索 hash
+    /// 的品质是碰运气的）。
     async fn get_download_url(&self, song: &SearchResult) -> Result<Url> {
-        let mut last_err = None;
-
-        // 1) baka：GET 302 到酷狗 CDN
-        for attempt in 0..2 {
-            let url = format!(
-                "https://api.baka.plus/meting/?server=kugou&type=url&id={}&br=2000",
-                song.song_id
+        if self.flac_only {
+            let extra = self.song_quality(&song.song_id).await?;
+            let Some(sq_hash) = extra.sq_hash.filter(|h| !h.is_empty()) else {
+                let hint = if extra.hash_320.is_some() {
+                    "仅 320k mp3"
+                } else {
+                    "无无损档"
+                };
+                bail!("kugou: 无 flac 版本 for {}（{hint}）", song.title);
+            };
+            eprintln!(
+                "kugou: sqhash resolved for {} ({} bytes)",
+                song.title,
+                extra.sq_filesize.unwrap_or(0)
             );
-            match self
-                .client
-                .get(&url)
-                .header("User-Agent", USER_AGENT)
-                .send()
-                .await
-            {
-                Ok(resp) if resp.url().host_str() != Some("api.baka.plus") => {
-                    return Ok(downgrade_to_http(resp.url()));
-                }
-                Ok(resp) => {
-                    last_err = Some(anyhow::anyhow!(
-                        "baka did not redirect (status {})",
-                        resp.status()
-                    ));
-                }
-                Err(e) => last_err = Some(e.into()),
-            }
-            if attempt == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            }
+            return self.resolve_hash(&sq_hash, true).await;
         }
-
-        // 2) meting 式解析站
-        for base in ["https://music.tom.moe/", "https://music.90svip.cn/"] {
-            match resolve_with_meting_site(&self.client, base, &song.song_id).await {
-                Ok(url) => return Ok(downgrade_to_http(&url)),
-                Err(e) => {
-                    eprintln!("kugou: meting site {base} failed: {e}");
-                    last_err = Some(e);
-                }
-            }
-        }
-
-        bail!(
-            "kugou: all resolvers failed for {}: {last_err:?}",
-            song.title
-        )
+        let hash = match self.song_quality(&song.song_id).await {
+            Ok(extra) => extra
+                .hash_320
+                .filter(|h| !h.is_empty())
+                .unwrap_or_else(|| song.song_id.clone()),
+            Err(_) => song.song_id.clone(),
+        };
+        self.resolve_hash(&hash, false).await
     }
 
     async fn get_metadata(&self, song: &SearchResult) -> Result<SongMetadata> {

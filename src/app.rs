@@ -18,8 +18,9 @@ pub async fn run() -> anyhow::Result<()> {
         anyhow::bail!("usage: rmus-dl <keyword>");
     }
 
-    let kuwo = Kuwo::new()?;
-    let kugou = Kugou::new()?;
+    let flac_only = crate::config::flac_only();
+    let kuwo = Kuwo::new(flac_only)?;
+    let kugou = Kugou::new(flac_only)?;
 
     println!("Searching for \"{keyword}\"...");
     let (kw_results, kg_results) = tokio::join!(kuwo.search(&keyword), kugou.search(&keyword));
@@ -67,6 +68,9 @@ pub async fn run() -> anyhow::Result<()> {
                 continue;
             }
         };
+
+        // flac_only 时下载前探针：上游给的若不是 flac，这里就拦下
+        crate::sources::probe_audio(&download_url, flac_only).await?;
 
         println!("Downloading \"{}\" via {source_name}...", result.title);
         let fallback_name = match &result.artist {

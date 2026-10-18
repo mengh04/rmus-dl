@@ -33,7 +33,7 @@ async fn probe_audio_magic(url: &reqwest::Url) -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn kuwo_full_chain_search_download_metadata() {
-    let kuwo = Kuwo::new().unwrap();
+    let kuwo = Kuwo::new(false).unwrap();
     let results = kuwo.search(KEYWORD).await.expect("kuwo search should work");
     assert!(!results.is_empty(), "kuwo search returned no results");
     assert!(
@@ -66,7 +66,7 @@ async fn kuwo_full_chain_search_download_metadata() {
 
 #[tokio::test]
 async fn kugou_search_and_baka_download() {
-    let kugou = Kugou::new().unwrap();
+    let kugou = Kugou::new(false).unwrap();
     let results = kugou
         .search(KEYWORD)
         .await

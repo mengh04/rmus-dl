@@ -17,6 +17,8 @@ const USER_AGENT: &str =
 #[derive(Clone)]
 pub struct Kuwo {
     client: Client,
+    /// 只要无损：mobi.s 只请求 flac，不再降级 mp3（mobi.s 的 mp3 只有 128k）
+    flac_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +34,10 @@ struct SearchItem {
     name: Option<String>,
     artist: Option<String>,
     album: Option<String>,
+    /// 时长（秒）；搜索接口直接给出
+    duration: Option<String>,
+    /// 音质清单："level:ff,bitrate:2000,format:flac,size:52.83Mb;..."
+    minfo: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,14 +64,14 @@ struct LrcLine {
 }
 
 impl Kuwo {
-    pub fn new() -> Result<Self> {
+    pub fn new(flac_only: bool) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("User-Agent", HeaderValue::from_static(USER_AGENT));
         let client = Client::builder()
             .cookie_store(true)
             .default_headers(headers)
             .build()?;
-        Ok(Self { client })
+        Ok(Self { client, flac_only })
     }
 
     /// mobi.s 下载接口：DES 加密的 query 换取直链，响应是 key=value 文本。
@@ -98,6 +104,28 @@ impl MusicSource for Kuwo {
         "kuwo"
     }
 
+    /// mobi.s 下载解析：flac_only 时只请求 flac（mobi.s 的 mp3 档实测只有
+    /// 128k，对"只要无损"没有意义），失败时错误里带上搜索期的品质标注。
+    async fn get_download_url(&self, song: &SearchResult) -> Result<Url> {
+        let formats: &[&str] = if self.flac_only { &["flac"] } else { &["flac", "mp3"] };
+        let mut last_err = None;
+        for format in formats {
+            match self.parse_download_url(&song.song_id, format).await {
+                Ok(url) => return Ok(url),
+                Err(e) => {
+                    eprintln!("kuwo: format {format} failed for {}: {e}", song.title);
+                    last_err = Some(e);
+                }
+            }
+        }
+        let hint = match (&song.format, last_err) {
+            (Some(f), _) => format!("（搜索标注：{f}）"),
+            (None, Some(e)) => format!("（{e}）"),
+            (None, None) => String::new(),
+        };
+        bail!("kuwo: 无可下载版本 for {}{hint}", song.title)
+    }
+
     async fn search(&self, keyword: &str) -> Result<Vec<SearchResult>> {
         let url = format!(
             "https://www.kuwo.cn/search/searchMusicBykeyWord?vipver=1&client=kt&ft=music&cluster=0&strategy=2012&encoding=utf8&rformat=json&mobi=1&issubtitle=1&show_copyright_off=1&pn=0&rn=30&all={}",
@@ -117,6 +145,14 @@ impl MusicSource for Kuwo {
             .into_iter()
             .filter_map(|item| {
                 let rid = item.musicrid.strip_prefix("MUSIC_")?.to_string();
+                // 下载前品质信息全在 MINFO 里：有无无损、最优 mp3、体积
+                let quality = item.minfo.as_deref().map(super::parse_minfo);
+                let format = match &quality {
+                    Some(q) if q.flac => Some("flac".to_string()),
+                    Some(q) => q.mp3_label.clone(),
+                    None => None,
+                };
+                let size_bytes = quality.and_then(|q| if q.flac { q.flac_size } else { None });
                 Some(SearchResult {
                     title: item.name.clone().unwrap_or_default(),
                     artist: item.artist,
@@ -124,20 +160,16 @@ impl MusicSource for Kuwo {
                     song_id: rid,
                     source: "kuwo",
                     cover_url: None,
+                    duration_ms: item
+                        .duration
+                        .and_then(|d| d.parse::<u64>().ok())
+                        .unwrap_or(0)
+                        * 1000,
+                    format,
+                    size_bytes,
                 })
             })
             .collect())
-    }
-
-    async fn get_download_url(&self, song: &SearchResult) -> Result<Url> {
-        // 先尝试无损 flac，失败再降级 mp3
-        for format in ["flac", "mp3"] {
-            match self.parse_download_url(&song.song_id, format).await {
-                Ok(url) => return Ok(url),
-                Err(e) => eprintln!("kuwo: format {format} failed for {}: {e}", song.title),
-            }
-        }
-        bail!("kuwo: no download url for {}", song.title)
     }
 
     async fn get_metadata(&self, song: &SearchResult) -> Result<SongMetadata> {

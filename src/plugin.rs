@@ -48,6 +48,9 @@ struct SongOut {
     album: String,
     source: String,
     song_id: String,
+    duration_ms: u64,
+    format: Option<String>,
+    size_bytes: Option<u64>,
 }
 
 impl From<&SearchResult> for SongOut {
@@ -58,11 +61,14 @@ impl From<&SearchResult> for SongOut {
             album: r.album.clone().unwrap_or_default(),
             source: r.source.to_string(),
             song_id: r.song_id.clone(),
+            duration_ms: r.duration_ms,
+            format: r.format.clone(),
+            size_bytes: r.size_bytes,
         }
     }
 }
 
-/// 客户端回传的 song 对象（下载时的寻址凭据）。
+/// 客户端回传的 song 对象（下载时的寻址凭据 + 搜索期品质标注）。
 #[derive(Debug, Deserialize)]
 struct SongRef {
     title: String,
@@ -70,6 +76,8 @@ struct SongRef {
     artist: String,
     source: String,
     song_id: String,
+    #[serde(default)]
+    format: Option<String>,
 }
 
 impl From<&SongRef> for SearchResult {
@@ -84,6 +92,9 @@ impl From<&SongRef> for SearchResult {
                 _ => "kuwo",
             },
             cover_url: None,
+            duration_ms: 0,
+            format: s.format.clone(),
+            size_bytes: None,
         }
     }
 }
@@ -137,8 +148,9 @@ pub fn manifest_json() -> String {
 
 /// 插件主循环：读一行、处理一行；下载任务在后台并发跑。
 pub async fn run() -> anyhow::Result<()> {
-    let kuwo = Kuwo::new().ok();
-    let kugou = Kugou::new().ok();
+    let flac_only = crate::config::flac_only();
+    let kuwo = Kuwo::new(flac_only).ok();
+    let kugou = Kugou::new(flac_only).ok();
     if kuwo.is_none() && kugou.is_none() {
         anyhow::bail!("没有任何可用音乐源（Kuwo/Kugou 初始化都失败了）");
     }
@@ -283,6 +295,14 @@ async fn download_job(
     cancel_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<serde_json::Value> {
     let search_result = SearchResult::from(song);
+    // flac_only 时搜索结果若已标注只有 mp3，不用回源就能直接拒
+    if crate::config::flac_only()
+        && search_result.source == "kuwo"
+        && search_result.format.as_deref().is_some_and(|f| f != "flac")
+    {
+        let label = search_result.format.as_deref().unwrap_or("未知");
+        anyhow::bail!("无 flac 版本（搜索标注：{label}）");
+    }
     // 产物名在拿到直链前无从得知（tag 决定），但 fallback 名（title - artist）
     // 命中绝大多数场景：先快速查一下，省得 30MB 下完才发现库里已有
     let fallback_probe = format!("{} - {}", song.title, song.artist);
@@ -305,7 +325,7 @@ async fn download_job(
     }
 }
 
-/// 下载后半程（源已定）：直链 → 下载 → 门禁 → 落盘。
+/// 下载后半程（源已定）：直链 → 探针 → 下载 → 门禁 → 落盘。
 async fn finish_download<S: MusicSource>(
     source: &S,
     search_result: &SearchResult,
@@ -315,8 +335,16 @@ async fn finish_download<S: MusicSource>(
     out_tx: &mpsc::Sender<String>,
     cancel_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<serde_json::Value> {
+    let flac_only = crate::config::flac_only();
     let url = source.get_download_url(search_result).await?;
     eprintln!("[dl] 开始下载 “{}”", song.title);
+
+    // 下载前最后确认：Range 探针验魔数 + 精确大小。上游偷偷降级 mp3
+    // 会在这里被拦下，而不是下完 30MB 才发现。
+    let probe = crate::sources::probe_audio(&url, flac_only).await?;
+    if let Some(total) = probe.total {
+        eprintln!("[dl] {} 确认 {} 字节", song.title, total);
+    }
 
     let notify = Arc::new(ProgressNotify {
         tx: out_tx.clone(),
