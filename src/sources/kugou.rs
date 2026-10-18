@@ -182,8 +182,6 @@ struct QualityExtra {
     sq_filesize: Option<u64>,
     #[serde(rename = "320hash")]
     hash_320: Option<String>,
-    #[serde(rename = "320filesize")]
-    filesize_320: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

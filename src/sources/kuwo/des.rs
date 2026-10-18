@@ -5,7 +5,6 @@
 const MASK32: u64 = (1u64 << 32) - 1;
 
 /// PC2 压缩置换表中的 -1 用 i8 表示并约定跳过。
-
 const ARRAYLS: [u8; 16] = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
 const ARRAYLSMASK: [u64; 3] = [0, 0x100001, 0x300003];
 
@@ -95,8 +94,8 @@ fn bittransform(arr: &[i8], l: u64) -> u64 {
 fn des64(longs: &[u64; 16], l: u64) -> u64 {
     let full = bittransform(&ARRAYIP2, l);
     let mut p_source = [full as u32, (full >> 32) as u32];
-    for i in 0..16 {
-        let r = bittransform(&ARRAYE, p_source[1] as u64) ^ longs[i];
+    for long in longs.iter().take(16) {
+        let r = bittransform(&ARRAYE, p_source[1] as u64) ^ long;
         let mut p_r = [0u8; 8];
         for (j, slot) in p_r.iter_mut().enumerate() {
             *slot = ((r >> (j * 8)) & 0xFF) as u8;

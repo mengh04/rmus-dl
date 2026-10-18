@@ -79,15 +79,7 @@ async fn main() -> anyhow::Result<()> {
         let doc = Html::parse_document(&html);
         let row_sel = Selector::parse(".play_list ul li .name a[href]").unwrap();
         for a in doc.select(&row_sel) {
-            let href = a.value().attr("href").unwrap();
-            let title = a.text().collect::<Vec<_>>().join("");
-
-            let song_id = href
-                .rsplit('/')
-                .next()
-                .unwrap()
-                .strip_suffix(".html")
-                .unwrap();
+            let _href = a.value().attr("href").unwrap();
         }
 
         // Download

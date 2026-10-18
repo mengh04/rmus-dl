@@ -89,10 +89,10 @@ impl Kuwo {
             .error_for_status()?;
         let text = resp.text().await?;
         for line in text.lines() {
-            if let Some(url) = line.strip_prefix("url=") {
-                if url.starts_with("http") {
-                    return Ok(Url::parse(url)?);
-                }
+            if let Some(url) = line.strip_prefix("url=")
+                && url.starts_with("http")
+            {
+                return Ok(Url::parse(url)?);
             }
         }
         bail!("mobi.s returned no url for rid {rid} format {format}:\n{text}");

@@ -171,61 +171,6 @@ impl SongMetadata {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn metadata_gate_requires_lyric_or_cover() {
-        assert!(SongMetadata::default().gate().is_err());
-        assert!(
-            SongMetadata {
-                lyric: Some("[00:00.00]x".into()),
-                cover_url: None,
-            }
-            .gate()
-            .is_ok()
-        );
-        assert!(
-            SongMetadata {
-                lyric: None,
-                cover_url: Some(Url::parse("http://example.com/a.jpg").unwrap()),
-            }
-            .gate()
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn minfo_解析出无损与最优mp3() {
-        let q = parse_minfo(
-            "level:ff,bitrate:2000,format:flac,size:52.83Mb;level:p,bitrate:192,format:ogg,size:5.59Mb;level:p,bitrate:300,format:ogg,size:9.85Mb;level:h,bitrate:100,format:ogg,size:2.79Mb;level:p,bitrate:320,format:mp3,size:10.29Mb;level:s,bitrate:48,format:aac,size:1.57Mb;level:h,bitrate:128,format:mp3,size:4.12Mb",
-        );
-        assert!(q.flac);
-        assert_eq!(q.flac_size, Some((52.83 * 1024.0 * 1024.0) as u64));
-        assert_eq!(q.mp3_label.as_deref(), Some("320k"));
-    }
-
-    #[test]
-    fn minfo_没有无损时只报mp3() {
-        let q = parse_minfo("level:p,bitrate:320,format:mp3,size:10.29Mb;level:h,bitrate:128,format:mp3,size:4.12Mb");
-        assert!(!q.flac);
-        assert_eq!(q.flac_size, None);
-        assert_eq!(q.mp3_label.as_deref(), Some("320k"));
-    }
-
-    #[test]
-    fn minfo_空串与坏字段不炸() {
-        let q = parse_minfo("");
-        assert!(!q.flac);
-        assert_eq!(q.mp3_label, None);
-        let q = parse_minfo("level:ff,format:flac,size:xxMb;format:mp3");
-        assert!(q.flac);
-        assert_eq!(q.flac_size, None);
-        assert_eq!(q.mp3_label, None);
-    }
-}
-
 /// 一个音乐源。仅在本 crate 内部使用，async fn in trait 的 Send 限制
 /// 不影响（app 按源依次调用）。
 #[allow(async_fn_in_trait)]
@@ -289,3 +234,59 @@ pub async fn write_metadata(file_path: &PathBuf, meta: &SongMetadata) -> Result<
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_gate_requires_lyric_or_cover() {
+        assert!(SongMetadata::default().gate().is_err());
+        assert!(
+            SongMetadata {
+                lyric: Some("[00:00.00]x".into()),
+                cover_url: None,
+            }
+            .gate()
+            .is_ok()
+        );
+        assert!(
+            SongMetadata {
+                lyric: None,
+                cover_url: Some(Url::parse("http://example.com/a.jpg").unwrap()),
+            }
+            .gate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn minfo_解析出无损与最优mp3() {
+        let q = parse_minfo(
+            "level:ff,bitrate:2000,format:flac,size:52.83Mb;level:p,bitrate:192,format:ogg,size:5.59Mb;level:p,bitrate:300,format:ogg,size:9.85Mb;level:h,bitrate:100,format:ogg,size:2.79Mb;level:p,bitrate:320,format:mp3,size:10.29Mb;level:s,bitrate:48,format:aac,size:1.57Mb;level:h,bitrate:128,format:mp3,size:4.12Mb",
+        );
+        assert!(q.flac);
+        assert_eq!(q.flac_size, Some((52.83 * 1024.0 * 1024.0) as u64));
+        assert_eq!(q.mp3_label.as_deref(), Some("320k"));
+    }
+
+    #[test]
+    fn minfo_没有无损时只报mp3() {
+        let q = parse_minfo("level:p,bitrate:320,format:mp3,size:10.29Mb;level:h,bitrate:128,format:mp3,size:4.12Mb");
+        assert!(!q.flac);
+        assert_eq!(q.flac_size, None);
+        assert_eq!(q.mp3_label.as_deref(), Some("320k"));
+    }
+
+    #[test]
+    fn minfo_空串与坏字段不炸() {
+        let q = parse_minfo("");
+        assert!(!q.flac);
+        assert_eq!(q.mp3_label, None);
+        let q = parse_minfo("level:ff,format:flac,size:xxMb;format:mp3");
+        assert!(q.flac);
+        assert_eq!(q.flac_size, None);
+        assert_eq!(q.mp3_label, None);
+    }
+}
+
