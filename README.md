@@ -15,6 +15,13 @@ Files land in the current directory with tags written via a **metadata gate**:
 a download that fails to obtain (or verify) lyrics/cover art is deleted, so no
 half-tagged files ever survive.
 
+**FLAC-only by default** — kuwo results are annotated with quality up front
+(parsed from MINFO: flac/320k/128k + size), kugou resolves the dedicated
+lossless hash, and every download is Range-probed before streaming: if the
+upstream quietly serves mp3, it aborts with zero bytes downloaded. To allow
+mp3 again: `RMUS_DL_FLAC_ONLY=0`, or `flac_only = false` in
+`~/.config/rmus-dl/config.toml`.
+
 ## rmus plugin mode
 
 As a child process of [rmus](../rmus) (terminal music player):
