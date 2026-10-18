@@ -109,14 +109,15 @@ impl ProgressNotify {
             "received": received,
             "total": total.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null),
         });
-        let _ = self.tx.send(
-            serde_json::to_string(&Notify {
-                event: "progress",
-                call: self.call,
-                data,
-            })
-            .unwrap_or_default(),
-        );
+        let line = serde_json::to_string(&Notify {
+            event: "progress",
+            call: self.call,
+            data,
+        })
+        .unwrap_or_default();
+        // 进度是可丢的：通道满就放弃这一条（150ms 节流，丢了无碍）。
+        // 注意不能调 async 的 send：那会创建 future 被 here 丢弃，一条也发不出。
+        let _ = self.tx.try_send(line);
     }
 }
 
@@ -282,6 +283,15 @@ async fn download_job(
     cancel_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<serde_json::Value> {
     let search_result = SearchResult::from(song);
+    // 产物名在拿到直链前无从得知（tag 决定），但 fallback 名（title - artist）
+    // 命中绝大多数场景：先快速查一下，省得 30MB 下完才发现库里已有
+    let fallback_probe = format!("{} - {}", song.title, song.artist);
+    for ext in ["flac", "mp3", "m4a", "ogg"] {
+        let candidate = dest_dir.join(format!("{fallback_probe}.{ext}"));
+        if candidate.exists() {
+            anyhow::bail!("同名文件已存在：{}", candidate.display());
+        }
+    }
     match search_result.source {
         "kuwo" => {
             let source = kuwo.as_ref().ok_or_else(|| anyhow::anyhow!("kuwo 源不可用"))?;
